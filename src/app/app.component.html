@@ -1,0 +1,583 @@
+<div class="app-shell">
+  <!-- Top Header Bar -->
+  <header class="top-bar">
+    <div class="brand-group">
+      <div class="brand-logo" aria-hidden="true">
+        <span class="logo-tile t1">W</span>
+        <span class="logo-tile t2">O</span>
+        <span class="logo-tile t3">R</span>
+        <span class="logo-tile t4">D</span>
+      </div>
+      <div class="brand-titles">
+        <h1>Word Search Puzzle</h1>
+        <p class="subtitle">
+          <span class="level-badge">Level {{ currentLevelNumber }}</span>
+          <span class="dot-sep">•</span>
+          <span>{{ currentCategory.icon }} {{ currentCategory.name }}</span>
+          <span class="dot-sep">•</span>
+          <span>{{ currentDifficulty.subtitle }}</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Live HUD Metrics -->
+    <div class="hud-metrics">
+      <div class="metric-card timer-card" [class.paused]="isPaused">
+        <span class="metric-label">TIME</span>
+        <div class="metric-value-row">
+          <span class="metric-value mono">{{ formattedTimer }}</span>
+          <button
+            type="button"
+            class="icon-btn"
+            (click)="togglePause()"
+            [title]="isPaused ? 'Resume Game' : 'Pause Game'"
+          >
+            {{ isPaused ? '▶' : '⏸' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="metric-card score-card">
+        <span class="metric-label">SCORE</span>
+        <div class="metric-value-row">
+          <span class="metric-value mono">{{ score | number }}</span>
+          <span class="streak-pill" *ngIf="wordStreak > 1" title="Consecutive word streak">
+            🔥 {{ wordStreak }}x
+          </span>
+        </div>
+      </div>
+
+      <div class="metric-card progress-metric">
+        <span class="metric-label">WORDS</span>
+        <div class="metric-value-row">
+          <span class="metric-value mono">{{ foundWordsCount }} / {{ placedWords.length }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Action Buttons -->
+    <div class="header-actions">
+      <button
+        type="button"
+        class="action-btn hint-btn"
+        (click)="useHint()"
+        [disabled]="hintsRemaining <= 0 || isPaused || isGameComplete"
+        title="Reveal a letter & dictionary clue for an unfound word"
+      >
+        <span class="btn-icon">💡</span>
+        <span>Hint</span>
+        <span class="count-pill">{{ hintsRemaining }}</span>
+      </button>
+
+      <button
+        type="button"
+        class="action-btn"
+        (click)="activeModal = 'levels'"
+      >
+        <span class="btn-icon">🗺️</span>
+        <span>Levels</span>
+      </button>
+
+      <button
+        type="button"
+        class="action-btn"
+        (click)="activeModal = 'scores'"
+      >
+        <span class="btn-icon">🏆</span>
+        <span>Scores</span>
+      </button>
+
+      <button
+        type="button"
+        class="action-btn primary-btn"
+        (click)="startNewPuzzle()"
+      >
+        <span class="btn-icon">↻</span>
+        <span>New Board</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Difficulty & Category Controls Bar -->
+  <section class="controls-bar" aria-label="Puzzle Settings">
+    <div class="difficulty-selector">
+      <span class="control-label">Difficulty:</span>
+      <div class="pill-group">
+        <button
+          *ngFor="let diff of difficulties"
+          type="button"
+          class="diff-pill"
+          [class.active]="selectedDifficultyId === diff.id"
+          (click)="onDifficultyChange(diff.id)"
+        >
+          <span class="diff-name">{{ diff.label }}</span>
+          <span class="diff-dims">{{ diff.rows }}×{{ diff.cols }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="category-selector">
+      <span class="control-label">Category:</span>
+      <div class="category-scroll">
+        <button
+          *ngFor="let cat of categories"
+          type="button"
+          class="cat-chip"
+          [class.active]="selectedCategoryId === cat.id"
+          (click)="onCategoryChange(cat.id)"
+        >
+          <span>{{ cat.icon }}</span>
+          <span>{{ cat.name }}</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Puzzle Workspace -->
+  <main class="workspace-grid">
+    <!-- Left Column: Interactive Letter Matrix -->
+    <section class="board-section" aria-label="Word Search Letter Grid">
+      <!-- Live Selection / Direction Status Banner -->
+      <div class="selection-banner">
+        <div class="selection-preview" *ngIf="selectedWordPreview; else idlePrompt">
+          <span class="preview-label">Selecting:</span>
+          <span class="preview-letters">{{ selectedWordPreview }}</span>
+          <span class="preview-len">({{ selectedCells.length }} letters)</span>
+        </div>
+        <ng-template #idlePrompt>
+          <div class="directions-legend">
+            <span class="legend-title">Directions:</span>
+            <span class="dir-tag">→ Horizontal</span>
+            <span class="dir-tag">↓ Vertical</span>
+            <span class="dir-tag">↘ ↙ Diagonal</span>
+            <span
+              class="dir-tag backward-tag"
+              *ngIf="selectedDifficultyId !== 'easy'"
+            >
+              ← ↑ ↖ Backward
+            </span>
+          </div>
+        </ng-template>
+
+        <div class="capture-toast" *ngIf="lastEarnedPoints > 0 && lastCaptureStatus === 'found'">
+          +{{ lastEarnedPoints }} pts!
+        </div>
+      </div>
+
+      <!-- Square Letter Grid Container -->
+      <div class="board-outer">
+        <div
+          #gridContainer
+          class="letter-board"
+          [style.--grid-rows]="grid.length"
+          [style.--grid-cols]="grid.length ? grid[0].length : 10"
+          (touchmove)="onGridTouchMove($event)"
+          (mouseleave)="!isDragging && !clickAnchored ? clearSelection() : null"
+        >
+          <!-- SVG Vector Overlay for Found Words & Active Drag Line -->
+          <svg
+            class="board-svg-overlay"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <!-- Found Words Highlight Lines -->
+            <ng-container *ngFor="let word of placedWords">
+              <line
+                *ngIf="word.found"
+                [attr.x1]="getWordLineCoords(word).x1"
+                [attr.y1]="getWordLineCoords(word).y1"
+                [attr.x2]="getWordLineCoords(word).x2"
+                [attr.y2]="getWordLineCoords(word).y2"
+                [attr.stroke]="word.color"
+                [attr.stroke-width]="getSvgStrokeWidth()"
+                stroke-linecap="round"
+                class="found-word-line"
+              />
+            </ng-container>
+
+            <!-- Active Selection Drag Line -->
+            <ng-container *ngIf="getActiveSelectionLineCoords() as activeLine">
+              <line
+                [attr.x1]="activeLine.x1"
+                [attr.y1]="activeLine.y1"
+                [attr.x2]="activeLine.x2"
+                [attr.y2]="activeLine.y2"
+                stroke="#38bdf8"
+                [attr.stroke-width]="getSvgStrokeWidth()"
+                stroke-linecap="round"
+                class="active-selection-line"
+              />
+            </ng-container>
+          </svg>
+
+          <!-- Grid Cells -->
+          <ng-container *ngFor="let rowCells of grid; let r = index">
+            <div
+              *ngFor="let cell of rowCells; let c = index"
+              class="grid-cell"
+              [attr.data-row]="r"
+              [attr.data-col]="c"
+              [class.selected]="isCellSelected(r, c)"
+              [class.found]="cell.foundColors.length > 0"
+              [class.hinted]="cell.isHinted"
+              [class.start-anchor]="selectionStart?.row === r && selectionStart?.col === c"
+              [style.--cell-found-color]="cell.foundColors[cell.foundColors.length - 1] || 'transparent'"
+              (pointerdown)="onCellPointerDown(r, c, $event)"
+              (pointerenter)="onCellPointerEnter(r, c)"
+            >
+              <span class="cell-letter">{{ cell.letter }}</span>
+            </div>
+          </ng-container>
+
+          <!-- Pause Screen Overlay -->
+          <div class="board-pause-overlay" *ngIf="isPaused">
+            <div class="pause-box">
+              <h3>Game Paused</h3>
+              <p>The puzzle grid is hidden while the timer is paused.</p>
+              <button type="button" class="action-btn primary-btn" (click)="togglePause()">
+                ▶ Resume Puzzle
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="board-footer-tip">
+        <span>💡 Tip: Drag across letters in a straight line, or click the first letter and then click the last letter.</span>
+        <button
+          *ngIf="clickAnchored"
+          type="button"
+          class="clear-anchor-btn"
+          (click)="clearSelection()"
+        >
+          Cancel Selection (Esc)
+        </button>
+      </p>
+    </section>
+
+    <!-- Right Column: Word List & Dictionary API Panel -->
+    <aside class="sidebar-section">
+      <!-- Word Bank Card -->
+      <div class="panel-card word-bank-card">
+        <div class="card-header">
+          <div>
+            <h2>Hidden Words</h2>
+            <p class="card-subtitle">Click any word to view its Dictionary meaning</p>
+          </div>
+          <label class="clue-toggle" title="Hide unfound letters and solve using Dictionary definitions">
+            <input type="checkbox" [(ngModel)]="clueMode" />
+            <span class="toggle-track"></span>
+            <span class="toggle-text">Clue Mode</span>
+          </label>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="progress-bar-track" role="progressbar" [attr.aria-valuenow]="progressPercentage">
+          <div class="progress-bar-fill" [style.width.%]="progressPercentage"></div>
+        </div>
+
+        <!-- Word Pills Grid -->
+        <div class="word-pills-grid" [class.clue-mode-list]="clueMode">
+          <button
+            *ngFor="let item of placedWords"
+            type="button"
+            class="word-pill"
+            [class.found]="item.found"
+            [class.active-inspect]="activeDictionaryWord?.word === item.word"
+            [class.hinted]="item.hintedCells > 0 && !item.found"
+            [style.--word-color]="item.color"
+            (click)="inspectWord(item)"
+          >
+            <div class="word-pill-main">
+              <span class="word-color-dot" [style.background]="item.found ? item.color : '#38bdf8'"></span>
+              <span class="word-text">{{ getMaskedWord(item) }}</span>
+              <span class="dir-hint-badge">{{ item.directionLabel }}</span>
+              <span class="word-len-badge">{{ item.word.length }}L</span>
+              <span class="hint-tag" *ngIf="item.hintedCells > 0 && !item.found">
+                💡 {{ item.hintedCells }}
+              </span>
+              <span class="found-check" *ngIf="item.found" [title]="item.directionLabel">
+                ✓
+              </span>
+            </div>
+
+            <p class="inline-clue-text">
+              <strong>Clue:</strong> {{ getQuickClue(item.word) }}
+            </p>
+          </button>
+        </div>
+      </div>
+
+      <!-- Word Meaning & Clue Explorer Card -->
+      <div class="panel-card dictionary-card">
+        <div class="dict-header">
+          <div class="dict-title-row">
+            <span class="dict-badge">📖 Word Meaning & Clue</span>
+          </div>
+
+          <ng-container *ngIf="activeDictionaryWord">
+            <div class="dict-headword-row">
+              <h3 class="dict-word">
+                {{
+                  clueMode && !activeDictionaryWord.found
+                    ? getMaskedWord(activeDictionaryWord)
+                    : activeDictionaryWord.word
+                }}
+              </h3>
+
+              <span
+                class="phonetic-pill"
+                *ngIf="activeDictionaryEntry?.phonetic && (!clueMode || activeDictionaryWord.found)"
+              >
+                {{ activeDictionaryEntry?.phonetic }}
+              </span>
+
+              <button
+                *ngIf="activeDictionaryEntry?.audioUrl && (!clueMode || activeDictionaryWord.found)"
+                type="button"
+                class="audio-btn"
+                (click)="playWordAudio(activeDictionaryEntry?.audioUrl)"
+                title="Listen to pronunciation"
+              >
+                🔊 Listen
+              </button>
+            </div>
+
+            <div class="word-status-strip">
+              <span
+                class="status-chip"
+                [class.found-chip]="activeDictionaryWord.found"
+              >
+                {{
+                  activeDictionaryWord.found
+                    ? '✓ Found (' + activeDictionaryWord.directionLabel + ')'
+                    : '🔍 Hidden in Grid (' + activeDictionaryWord.word.length + ' letters)'
+                }}
+              </span>
+            </div>
+          </ng-container>
+        </div>
+
+        <div class="dict-body">
+          <div class="dict-loading" *ngIf="isLoadingDictionary">
+            <span class="spinner"></span>
+            <span>Loading word definition...</span>
+          </div>
+
+          <ng-container *ngIf="!isLoadingDictionary && activeDictionaryEntry as entry">
+            <div class="meaning-block" *ngFor="let meaning of entry.meanings.slice(0, 2)">
+              <span class="pos-tag">{{ meaning.partOfSpeech }}</span>
+              <ol class="def-list">
+                <li *ngFor="let def of meaning.definitions.slice(0, 2)">
+                  <p class="def-text">{{ def.definition }}</p>
+                  <p class="def-example" *ngIf="def.example && (!clueMode || activeDictionaryWord?.found)">
+                    “{{ def.example }}”
+                  </p>
+                </li>
+              </ol>
+
+              <div class="synonyms-row" *ngIf="meaning.synonyms && meaning.synonyms.length > 0">
+                <span class="syn-label">Synonyms:</span>
+                <span class="syn-chip" *ngFor="let syn of meaning.synonyms">{{ syn }}</span>
+              </div>
+            </div>
+          </ng-container>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- MODAL 1: Campaign Levels Progression (Saved Locally) -->
+  <div class="modal-backdrop" *ngIf="activeModal === 'levels'" (click)="activeModal = 'none'">
+    <div class="modal-dialog levels-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div>
+          <h2>🗺️ Campaign Levels</h2>
+          <p>Complete puzzles to unlock higher levels. All stars & scores are saved locally.</p>
+        </div>
+        <button type="button" class="close-btn" (click)="activeModal = 'none'">✕</button>
+      </div>
+
+      <div class="levels-grid">
+        <button
+          *ngFor="let lvl of levels"
+          type="button"
+          class="level-card"
+          [class.unlocked]="lvl.unlocked"
+          [class.completed]="lvl.completed"
+          [class.current]="lvl.levelNumber === currentLevelNumber"
+          [disabled]="!lvl.unlocked"
+          (click)="startLevel(lvl.levelNumber)"
+        >
+          <div class="level-top">
+            <span class="level-num">Level {{ lvl.levelNumber }}</span>
+            <span class="level-diff" [attr.data-diff]="lvl.difficulty">{{ lvl.difficulty }}</span>
+          </div>
+
+          <div class="level-cat">
+            <span>{{ getCategoryById(lvl.categoryId).icon }}</span>
+            <span>{{ getCategoryById(lvl.categoryId).name }}</span>
+          </div>
+
+          <div class="level-stars" *ngIf="lvl.unlocked; else lockedBadge">
+            <span class="star" [class.earned]="lvl.stars >= 1">★</span>
+            <span class="star" [class.earned]="lvl.stars >= 2">★</span>
+            <span class="star" [class.earned]="lvl.stars >= 3">★</span>
+          </div>
+          <ng-template #lockedBadge>
+            <div class="locked-label">🔒 Locked</div>
+          </ng-template>
+
+          <div class="level-best" *ngIf="lvl.completed">
+            <span>Best: {{ lvl.bestScore | number }} pts</span>
+            <span>{{ formatSeconds(lvl.bestTimeSec) }}</span>
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: Local Leaderboard & Player Statistics -->
+  <div class="modal-backdrop" *ngIf="activeModal === 'scores'" (click)="activeModal = 'none'">
+    <div class="modal-dialog scores-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div>
+          <h2>🏆 Saved Scores & Statistics</h2>
+          <p>Persisted in your browser's local storage across sessions.</p>
+        </div>
+        <button type="button" class="close-btn" (click)="activeModal = 'none'">✕</button>
+      </div>
+
+      <!-- Lifetime KPI Summary -->
+      <div class="stats-kpi-grid" *ngIf="playerStats">
+        <div class="kpi-box">
+          <span class="kpi-label">Total Score</span>
+          <span class="kpi-val">{{ playerStats.totalScore | number }}</span>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Puzzles Solved</span>
+          <span class="kpi-val">{{ playerStats.gamesCompleted }}</span>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Words Found</span>
+          <span class="kpi-val">{{ playerStats.totalWordsFound }}</span>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Fastest Time</span>
+          <span class="kpi-val">{{ formatSeconds(playerStats.fastestWinSec) }}</span>
+        </div>
+      </div>
+
+      <!-- Filter Tabs -->
+      <div class="scores-filter-bar">
+        <div class="filter-pills">
+          <button
+            type="button"
+            class="diff-pill"
+            [class.active]="scoreFilterDifficulty === 'all'"
+            (click)="scoreFilterDifficulty = 'all'"
+          >
+            All
+          </button>
+          <button
+            *ngFor="let diff of difficulties"
+            type="button"
+            class="diff-pill"
+            [class.active]="scoreFilterDifficulty === diff.id"
+            (click)="scoreFilterDifficulty = diff.id"
+          >
+            {{ diff.label }}
+          </button>
+        </div>
+
+        <button
+          type="button"
+          class="reset-data-btn"
+          (click)="resetAllSavedData()"
+        >
+          Reset Saved Data
+        </button>
+      </div>
+
+      <!-- Leaderboard Table -->
+      <div class="scores-table-wrap" *ngIf="filteredScoreHistory.length > 0; else emptyScores">
+        <table class="scores-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Level / Category</th>
+              <th>Difficulty</th>
+              <th>Score</th>
+              <th>Time</th>
+              <th>Stars</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let row of filteredScoreHistory; let idx = index">
+              <td class="rank-col">{{ idx + 1 }}</td>
+              <td>
+                <strong>Lvl {{ row.levelNumber }}</strong> · {{ row.categoryName }}
+              </td>
+              <td>
+                <span class="level-diff" [attr.data-diff]="row.difficulty">
+                  {{ row.difficulty }} ({{ row.gridSize }})
+                </span>
+              </td>
+              <td class="mono score-col">{{ row.score | number }}</td>
+              <td class="mono">{{ formatSeconds(row.timeSec) }}</td>
+              <td class="stars-col">
+                <span class="star earned" *ngFor="let s of [].constructor(row.stars)">★</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ng-template #emptyScores>
+        <div class="empty-scores-state">
+          <p>No completed puzzles recorded for this filter yet. Solve a board to set your high score!</p>
+        </div>
+      </ng-template>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Victory Celebration -->
+  <div class="modal-backdrop" *ngIf="activeModal === 'victory'">
+    <div class="modal-dialog victory-modal">
+      <div class="victory-stars">
+        <span class="v-star" [class.earned]="victoryStars >= 1">★</span>
+        <span class="v-star" [class.earned]="victoryStars >= 2">★</span>
+        <span class="v-star" [class.earned]="victoryStars >= 3">★</span>
+      </div>
+
+      <h2>Puzzle Complete!</h2>
+      <p class="victory-sub">
+        Level {{ currentLevelNumber }} · {{ currentCategory.name }} ({{ currentDifficulty.label }})
+      </p>
+
+      <div class="victory-stats-row">
+        <div class="v-stat">
+          <span class="v-label">Final Score</span>
+          <span class="v-val">{{ score | number }}</span>
+        </div>
+        <div class="v-stat">
+          <span class="v-label">Time</span>
+          <span class="v-val">{{ formattedTimer }}</span>
+        </div>
+        <div class="v-stat">
+          <span class="v-label">Words Found</span>
+          <span class="v-val">{{ placedWords.length }} / {{ placedWords.length }}</span>
+        </div>
+      </div>
+
+      <div class="victory-actions">
+        <button type="button" class="action-btn" (click)="startNewPuzzle()">
+          ↻ Replay Level
+        </button>
+        <button type="button" class="action-btn primary-btn" (click)="nextLevel()">
+          Next Level →
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

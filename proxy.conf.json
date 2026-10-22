@@ -1,0 +1,8 @@
+{
+  "/api/v2": {
+    "target": "https://api.dictionaryapi.dev",
+    "secure": true,
+    "changeOrigin": true,
+    "logLevel": "warn"
+  }
+}
